@@ -20,41 +20,99 @@
 	-->
 
 - [x] Implement Server Functionality
-	<!--
-	1. **Setup**
-	   - Add dependencies to `Cargo.toml`:
-	     - `axum` for HTTP server and APIs.
-	     - `serde` and `serde_json` for JSON handling.
-	     - `tokio` for async file handling.
-	     - `walkdir` for directory traversal.
-	     - `rusqlite` for SQLite database.
-	     - `mime_guess` for MIME type detection.
-	     - `config` for external configuration management.
+	Implemented
+	- HTTP server with Axum; endpoints: `POST /scan`, `GET /media` (supports `parent_id` or relative `path` + optional `tags`), `GET /media/details` (relative `path` or numeric id).
+	- SQLite via `sqlx` with table `media` (id, name, unique relative path, optional `parent_id`, `mime_type`, `size`, optional `tags` JSON, timestamps). Indexes on `path` and `parent_id`.
+	- Scanner uses `tokio::fs` for DFS traversal, upserts directories immediately (to obtain IDs), batches file upserts in sqlx transactions (batch size 500), and detects MIME via `mime_guess`.
+	- Config loaded via `config` crate; runtime via `tokio`.
+	Note: Replaced `rusqlite` with `sqlx`, and traversal is via `tokio::fs` (not `walkdir`).
 
-	2. **Directory Scanning and Indexing**
-	   - Add configuration for the directory to scan.
-	   - Use `walkdir` to traverse directories recursively.
-	   - Identify media files by extensions (e.g., `.mp4`, `.mp3`, `.jpg`).
-	   - Create a SQLite database and insert file metadata (path, MIME type, size).
+- [x] Add Thumbnails and Streaming APIs
+	Goal
+	- Browse media with thumbnails; when viewing details, load full images or stream videos with HTTP Range.
 
-	3. **APIs**
-	   - `GET /media`: List files in the current directory and allow traversing directories using a `path` query parameter.
-	   - `GET /media/details`: Retrieve details for a specific file, including its path, MIME type, and size.
-	   - `GET /media/stream/{id}`: Stream media files using file paths from the database.
-	   - `POST /scan`: Trigger a directory scan via REST API.
+	Plan
+	1. Dependencies (Cargo.toml)
+	   - Add `tokio-util` (for `ReaderStream`/`StreamBody`) for streaming. [DONE]
+	   - Add `image` for image thumbnail generation (PNG/JPEG/WebP as needed). [DONE]
+	   - Optional: integrate video thumbnailing via external `ffmpeg` CLI (document requirement) or add a Rust wrapper later. [PENDING]
 
-	4. **Error Handling**
-	   - Handle invalid directory paths, database issues, and missing files.
+	2. Storage/model changes
+		- Store thumbnails on disk under a configurable thumbnails directory (defaults follow XDG or `/var/cache`) using deterministic names (e.g., `<media_id>_<wxh>.jpg`). [UPDATED - static serving added, generator writes to configured dir]
+	   - Add nullable columns to `media` via lightweight migration: `width`, `height`, `duration_secs` (for videos), and `thumb_path` (relative path under `.thumbnails`). Keep data model backward compatible. [DONE]
 
-	5. **Testing**
-	   - Write unit tests for scanning, indexing, and database logic.
-	   - Write integration tests for API endpoints.
+	3. Scanner updates
+	   - On scan (or first request), generate thumbnails for images if missing or stale; record `thumb_path`, `width`, `height`. [PARTIAL - scanner records fields but automatic thumbnail generation during scan not implemented]
+	   - For videos, generate a poster frame with `ffmpeg` (best-effort, skip if tool missing). [PENDING]
 
-	6. **Future Enhancements**
-	   - Add pagination to `GET /media`.
-	   - Implement authentication for APIs.
-	   - Add transcoding support for streaming.
-	-->
+	4. APIs
+	   - `GET /media/thumbnail?id|path[&w=..&h=..]`: returns a small image thumbnail (serve existing or generate on-demand; cache result; set appropriate `Content-Type` and caching headers). [IMPLEMENTED]
+	     - Behavior: serves existing static thumbnail when present; when missing, `thumbnail_handler` now redirects clients to the generator endpoint.
+		- `GET /media/generate_thumbnail?id|path&w&h`: on-demand generator that creates a thumbnail, writes it to the configured thumbnails directory (`<thumbnails_dir>/<id>_<wxh>.jpg`), upserts `thumb_path`, and redirects to the static URL. [IMPLEMENTED]
+	   - `GET /media/stream?id|path`: stream files (images, audio, video) with HTTP Range support. [IMPLEMENTED - basic single-range support]
+	   - `GET /media/image?id|path` (alias): serve full-resolution images with correct `Content-Type` (alias to `stream`). [IMPLEMENTED]
+	   - Enhance `GET /media/details` response to include `thumbnail_url` and `stream_url`/`image_url` fields for clients. [IMPLEMENTED]
+
+	5. Validation & security
+	   - Enforce relative paths (no leading `/`, no `..`). Ensure resolved file paths stay under configured media root. [IMPLEMENTED]
+
+	6. Testing
+	   - Unit: DB model changes; thumbnail path resolver; Range parsing. [PENDING]
+	   - Integration: create temp media dir with small image/video; run scan; assert `thumbnail` and `stream` endpoints; verify Range behavior and content types. [PENDING]
+
+	7. Client (follow-up)
+	   - Update React client to render grid with thumbnails and open viewer that uses `image_url` or `stream_url` from details. [PENDING]
+
+	In progress / Completed items
+	- [x] Serve static thumbnails from the configured thumbnails directory mounted at `/thumbnails` using `tower-http` ServeDir.
+	- [x] Include `thumbnail_url` and `stream_url` in `/media` and `/media/details` responses. Listings now return `thumbnail_url` pointing at `/thumbnails/<id>_200x200.jpg` when a thumbnail is known (or will be created by the generator).
+	- [x] Added `image` and `tokio-util` dependencies and implemented generation code paths.
+	- [x] Implemented `GET /media/generate_thumbnail` that writes thumbnails and upserts DB thumb_path (best-effort) then redirects to the static URL.
+	- [x] Implemented `GET /media/thumbnail` as a fallback which serves existing thumbnails or redirects clients to the generator endpoint.
+	- [x] Implemented `GET /media/stream` with basic Range support and correct Content-Type; `GET /media/image` is an alias.
+	- [x] Refactored `handlers.rs` into `handlers/{core,thumbnails,streaming}` and updated `main.rs` imports/routes.
+	- [x] Registered routes: `/media/thumbnail`, `/media/generate_thumbnail`, `/media/stream`, `/media/image`, plus static `/thumbnails` mount.
+	- [x] Cargo build/check runs cleanly; basic manual smoke tests performed (server starts, listing endpoints reachable).
+
+	Remaining Plan (next concrete steps)
+	1. Streaming improvements (high priority) [IMPLEMENTED - single-range]
+	   - Hardened `/media/stream` Range parsing to handle standard RFC-7233 single-range forms: `start-end`, `start-` (to EOF), and `-suffix` (last N bytes). Returns 416 for malformed or out-of-bounds ranges. [DONE]
+	   - Return accurate `Content-Length` for both 200 and 206 responses and ensure `Content-Range` formatting is correct. [DONE]
+	   - Stream efficiently: handler now seeks to `start`, uses `tokio::io::Take(length)` + `tokio_util::io::ReaderStream` -> `axum::body::StreamBody` so we do not load entire files into memory. [DONE]
+	   - Notes: current implementation supports single-range only (most browsers/players). Multi-range multipart/byteranges is not implemented yet.
+
+	   Next steps (streaming):
+	   - Add optional multi-range support (multipart/byteranges) if clients require it.
+	   - Add ETag / Last-Modified / conditional GET support for caching and 304 responses (could be delegated to a static file service for thumbnails).
+	   - Add integration tests to verify 200 vs 206 behavior, Content-Length/Content-Range, and 416 cases.
+	   - Consider using `hyper-staticfile` or tower-http `ServeFile` for pure static file cases to get more comprehensive conditional/Range semantics out-of-the-box.
+
+	2. Video thumbnails & metadata (medium priority)
+	   - Add optional ffmpeg-based poster frame extraction (document `ffmpeg` as a system dependency) and store `duration_secs` in DB.
+	   - Consider using `ffmpeg` via CLI (best-effort) rather than adding a heavy Rust binding.
+
+	3. Scanner & indexer enhancements (medium priority)
+	   - Optionally generate thumbnails during scan (configurable) to avoid first-request latency.
+	   - Add freshness checks (e.g., if file mtime changed, regenerate thumbnails).
+
+	4. Testing & CI (high priority)
+	   - Add unit tests for DB upserts, thumbnail path resolution, and Range parsing logic.
+	   - Add integration tests that run against a temp media dir, run the scanner, then exercise `/media`, `/media/generate_thumbnail`, and `/media/stream` endpoints.
+
+	5. Client updates (low priority)
+	   - Update the React client to use `thumbnail_url` from `/media` and call `/media/image` or `/media/stream` when viewing details.
+
+	6. Cleanup
+	   - Remove any remaining compiler warnings and tidy code (unused vars, minor refactors).
+	   - Add Cache-Control headers to generated thumbnails and consider `ETag`/Last-Modified support.
+
+	Priority Notes
+	- Urgent: Harden streaming Range behavior and ensure accurate Content-Length/Content-Range.
+	- Next: Implement ffmpeg-based video poster extraction (optional system dep).
+	- Tests are required before marking this feature complete.
+
+	Notes
+	- Current implementation mounts `/thumbnails` as a static directory. The `/media/thumbnail` handler acts as a fallback and now redirects to `/media/generate_thumbnail` to create thumbnails on-demand; after generation, clients should prefer the static `/thumbnails/<id>_<wxh>.jpg` URL returned in metadata.
 
 - [ ] Install Required Extensions
 	<!-- ONLY install extensions provided mentioned in the get_project_setup_info. Skip this step otherwise and mark as completed. -->
@@ -135,6 +193,3 @@ TASK COMPLETION RULES:
 
 Before starting a new task in the above plan, update progress in the plan.
 -->
-- Work through each checklist item systematically.
-- Keep communication concise and focused.
-- Follow development best practices.

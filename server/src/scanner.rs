@@ -74,6 +74,10 @@ pub async fn scan_directory_and_index(
                                 mime_type: None,
                                 size: None,
                                 tags: None,
+                                thumb_path: None,
+                                width: None,
+                                height: None,
+                                duration_secs: None,
                             };
 
                             let new_parent_id = db::upsert_media(pool.clone(), &n)
@@ -94,6 +98,10 @@ pub async fn scan_directory_and_index(
                                 mime_type: Some(mime_type),
                                 size: Some(size),
                                 tags: None,
+                                thumb_path: None,
+                                width: None,
+                                height: None,
+                                duration_secs: None,
                             };
 
                             // Buffer file entries for batch processing

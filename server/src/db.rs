@@ -12,6 +12,10 @@ pub async fn initialize_database(pool: SqlitePool) -> Result<(), sqlx::Error> {
             mime_type TEXT,
             size INTEGER,
             tags TEXT,
+            thumb_path TEXT,
+            width INTEGER,
+            height INTEGER,
+            duration_secs INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (parent_id) REFERENCES media (id)
         )
@@ -33,14 +37,18 @@ pub async fn upsert_media(pool: SqlitePool, entry: &NewMediaEntry) -> Result<i64
         .as_ref()
         .and_then(|t| serde_json::to_string(t).ok());
     let q = r#"
-        INSERT INTO media (name, path, parent_id, mime_type, size, tags)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        INSERT INTO media (name, path, parent_id, mime_type, size, tags, thumb_path, width, height, duration_secs)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT(path) DO UPDATE SET
             name=excluded.name,
             parent_id=excluded.parent_id,
             mime_type=excluded.mime_type,
             size=excluded.size,
-            tags=excluded.tags
+            tags=excluded.tags,
+            thumb_path=excluded.thumb_path,
+            width=excluded.width,
+            height=excluded.height,
+            duration_secs=excluded.duration_secs
     "#;
 
     query(q)
@@ -50,6 +58,10 @@ pub async fn upsert_media(pool: SqlitePool, entry: &NewMediaEntry) -> Result<i64
         .bind(&entry.mime_type)
         .bind(entry.size)
         .bind(&tags_json)
+        .bind(&entry.thumb_path)
+        .bind(entry.width)
+        .bind(entry.height)
+        .bind(entry.duration_secs)
         .execute(&pool)
         .await?;
 
@@ -70,14 +82,18 @@ pub async fn upsert_media_in_tx(
         .as_ref()
         .and_then(|t| serde_json::to_string(t).ok());
     let q = r#"
-        INSERT INTO media (name, path, parent_id, mime_type, size, tags)
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        INSERT INTO media (name, path, parent_id, mime_type, size, tags, thumb_path, width, height, duration_secs)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT(path) DO UPDATE SET
             name=excluded.name,
             parent_id=excluded.parent_id,
             mime_type=excluded.mime_type,
             size=excluded.size,
-            tags=excluded.tags
+            tags=excluded.tags,
+            thumb_path=excluded.thumb_path,
+            width=excluded.width,
+            height=excluded.height,
+            duration_secs=excluded.duration_secs
     "#;
 
     query(q)
@@ -87,6 +103,10 @@ pub async fn upsert_media_in_tx(
         .bind(&entry.mime_type)
         .bind(entry.size)
         .bind(&tags_json)
+        .bind(&entry.thumb_path)
+        .bind(entry.width)
+        .bind(entry.height)
+        .bind(entry.duration_secs)
         .execute(&mut **tx)
         .await?;
 
@@ -99,8 +119,8 @@ pub async fn upsert_media_in_tx(
 }
 
 pub async fn get_media_by_id(pool: SqlitePool, id: i64) -> Result<Option<MediaEntry>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, Option<i64>, Option<String>, String)>(
-        "SELECT id, name, path, parent_id, mime_type, size, tags, created_at FROM media WHERE id = ?1",
+    let row = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, String)>(
+        "SELECT id, name, path, parent_id, mime_type, size, tags, thumb_path, width, height, duration_secs, created_at FROM media WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(&pool)
@@ -115,8 +135,12 @@ pub async fn get_media_by_id(pool: SqlitePool, id: i64) -> Result<Option<MediaEn
             parent_id: r.3,
             mime_type: r.4,
             size: r.5,
-            created_at: r.7,
+            created_at: r.11,
             tags,
+            thumb_path: r.7,
+            width: r.8,
+            height: r.9,
+            duration_secs: r.10,
         }))
     } else {
         Ok(None)
@@ -127,8 +151,8 @@ pub async fn get_media_by_path(
     pool: SqlitePool,
     path: String,
 ) -> Result<Option<MediaEntry>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, Option<i64>, Option<String>, String)>(
-        "SELECT id, name, path, parent_id, mime_type, size, tags, created_at FROM media WHERE path = ?1",
+    let row = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, String)>(
+        "SELECT id, name, path, parent_id, mime_type, size, tags, thumb_path, width, height, duration_secs, created_at FROM media WHERE path = ?1",
     )
     .bind(path)
     .fetch_optional(&pool)
@@ -143,8 +167,12 @@ pub async fn get_media_by_path(
             parent_id: r.3,
             mime_type: r.4,
             size: r.5,
-            created_at: r.7,
+            created_at: r.11,
             tags,
+            thumb_path: r.7,
+            width: r.8,
+            height: r.9,
+            duration_secs: r.10,
         }))
     } else {
         Ok(None)
@@ -156,8 +184,8 @@ pub async fn list_children(
     parent_id: Option<i64>,
     tags: Option<Vec<String>>,
 ) -> Result<Vec<MediaEntry>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, Option<i64>, Option<String>, String)>(
-        "SELECT id, name, path, parent_id, mime_type, size, tags, created_at FROM media WHERE parent_id IS ?1",
+    let rows = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<String>, Option<i64>, Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, String)>(
+        "SELECT id, name, path, parent_id, mime_type, size, tags, thumb_path, width, height, duration_secs, created_at FROM media WHERE parent_id IS ?1",
     )
     .bind(parent_id)
     .fetch_all(&pool)
@@ -173,8 +201,12 @@ pub async fn list_children(
             parent_id: r.3,
             mime_type: r.4,
             size: r.5,
-            created_at: r.7,
+            created_at: r.11,
             tags: tags_vec,
+            thumb_path: r.7,
+            width: r.8,
+            height: r.9,
+            duration_secs: r.10,
         });
     }
 

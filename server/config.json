@@ -1,4 +1,6 @@
 {
   "db_path": "media.db",
-  "directory_to_scan": "/Users/be4091/Learn/media-server/server/media"
+  "directory_to_scan": "/Users/be4091/Learn/media-server/server/media",
+  "ffmpeg_enabled": false,
+  "thumbnails_dir": "/Users/be4091/Learn/media-server/server/.thumbnails"
 }

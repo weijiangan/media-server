@@ -5,20 +5,27 @@ mod models;
 mod scanner;
 mod state;
 
+use axum::routing::get_service;
 use config::AppConfig;
 use db::initialize_database;
-use handlers::{get_file_details_handler, list_directory_handler, trigger_scan_handler};
+use handlers::{
+    generate_thumbnail_handler, get_file_details_handler, list_directory_handler, stream_handler,
+    thumbnail_handler, trigger_scan_handler,
+};
 use state::AppState;
+use tower_http::services::ServeDir;
 
 use ::config::{builder::DefaultState, ConfigBuilder, File};
 use axum::{
     routing::{get, post},
     Router,
 };
+use image::{ImageOutputFormat, RgbImage};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing_subscriber;
 
 use clap::Command as ClapApp;
 
@@ -36,6 +43,8 @@ fn main() {
         .expect("failed to build runtime");
 
     rt.block_on(async {
+        // initialize tracing subscriber (reads RUST_LOG env)
+        tracing_subscriber::fmt::init();
         let settings = ConfigBuilder::<DefaultState>::default()
             .add_source(File::with_name("config"))
             .build()
@@ -51,7 +60,7 @@ fn main() {
         }
 
         // log resolved DB path and create the file if missing
-        println!("Resolved DB path: {}", db_path.display());
+        tracing::info!("Resolved DB path: {}", db_path.display());
         if db_path.exists() {
             if db_path.is_dir() {
                 panic!("Configured db_path is a directory: {}", db_path.display());
@@ -81,21 +90,98 @@ fn main() {
             )
             .await
             {
-                eprintln!("Error scanning directory: {}", e);
+                tracing::error!("Error scanning directory: {}", e);
             }
             println!("Directory scan completed.");
             return;
         }
 
+        // resolve thumbnails directory (configurable)
+        let thumbnails_dir_path = if let Some(t) = config.thumbnails_dir.clone() {
+            std::path::PathBuf::from(t)
+        } else {
+            // Prefer system cache for root, per-user XDG otherwise
+            if nix::unistd::Uid::effective().is_root() {
+                std::path::PathBuf::from("/var/cache/media-server/thumbnails")
+            } else if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+                std::path::PathBuf::from(xdg).join("media-server/thumbnails")
+            } else if let Some(home) = dirs::home_dir() {
+                home.join(".cache/media-server/thumbnails")
+            } else {
+                std::path::PathBuf::from(".thumbnails")
+            }
+        };
+
         let state = Arc::new(Mutex::new(AppState {
             pool: pool.clone(),
             directory_to_scan: config.directory_to_scan.clone(),
+            ffmpeg_enabled: config.ffmpeg_enabled.unwrap_or(false),
+            ffmpeg_path: config.ffmpeg_path.clone(),
+            ffprobe_path: config.ffprobe_path.clone(),
+            thumbnails_dir: Some(thumbnails_dir_path.to_string_lossy().to_string()),
         }));
+
+        // ensure dir exists and serve thumbnails from resolved location
+        let _ = std::fs::create_dir_all(&thumbnails_dir_path);
+        tracing::info!("Thumbnails directory: {}", thumbnails_dir_path.display());
+
+        // Ensure a placeholder thumbnail exists so redirects to
+        // `/thumbnails/placeholder.jpg` never 404. We create a tiny 16x16
+        // gray JPEG if missing.
+        let placeholder_path = thumbnails_dir_path.join("placeholder.jpg");
+        if !placeholder_path.exists() {
+            if let Ok(mut buf) = std::fs::File::create(&placeholder_path) {
+                // Create a 16x16 gray image
+                let img = RgbImage::from_pixel(16, 16, image::Rgb([200u8, 200u8, 200u8]));
+                // Encode JPEG into the file
+                let _ = image::DynamicImage::ImageRgb8(img).write_to(
+                    &mut std::io::BufWriter::new(&mut buf),
+                    ImageOutputFormat::Jpeg(75),
+                );
+            }
+        }
+
+        // Garbage-collect stale temporary thumbnail files left from crashes or
+        // interrupted runs. We match filenames with the pattern
+        // `<id>_<wxh>.<nanos>.jpg` (i.e. have an extra `.` before the .jpg) and
+        // remove ones older than 1 hour.
+        if let Ok(entries) = std::fs::read_dir(&thumbnails_dir_path) {
+            let now = std::time::SystemTime::now();
+            for e in entries.flatten() {
+                if let Ok(fname) = e.file_name().into_string() {
+                    if fname.ends_with(".jpg") && fname.matches('.').count() >= 2 {
+                        if let Ok(meta) = e.metadata() {
+                            if let Ok(modified) = meta.modified() {
+                                if let Ok(age) = now.duration_since(modified) {
+                                    if age.as_secs() > 60 * 60 {
+                                        let _ = std::fs::remove_file(e.path());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let serve_thumbs = get_service(ServeDir::new(thumbnails_dir_path)).handle_error(
+            |e: std::io::Error| async move {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Unhandled internal error: {}", e),
+                )
+            },
+        );
+        // (previously created serve_thumbs above)
 
         let app = Router::new()
             .route("/scan", post(trigger_scan_handler))
             .route("/media", get(list_directory_handler))
             .route("/media/details", get(get_file_details_handler))
+            .route("/media/thumbnail", get(thumbnail_handler))
+            .route("/media/generate_thumbnail", get(generate_thumbnail_handler))
+            .route("/media/stream", get(stream_handler))
+            .route("/media/image", get(stream_handler))
+            .nest_service("/thumbnails", serve_thumbs)
             .with_state(state.clone());
 
         let host = config.host.unwrap_or_else(|| "127.0.0.1".to_string());

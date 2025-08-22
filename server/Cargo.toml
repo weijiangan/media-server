@@ -13,5 +13,14 @@ sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls", "mac
 mime_guess = "2.0"
 clap = { version = "4.0", features = ["derive"] }
 config = "0.13"
+# added for streaming and thumbnails
+tokio-util = { version = "0.7", features = ["io"] }
+image = "0.24"
+# static file serving
+tower-http = { version = "0.3", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+dirs = "4"
+nix = "0.26"
 
 [dev-dependencies]
