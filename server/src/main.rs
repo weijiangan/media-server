@@ -5,6 +5,7 @@ mod models;
 mod scanner;
 mod state;
 
+use axum::http::{HeaderValue, Method};
 use axum::routing::get_service;
 use config::AppConfig;
 use db::initialize_database;
@@ -13,6 +14,7 @@ use handlers::{
     thumbnail_handler, trigger_scan_handler,
 };
 use state::AppState;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 
 use ::config::{builder::DefaultState, ConfigBuilder, File};
@@ -173,6 +175,48 @@ fn main() {
         );
         // (previously created serve_thumbs above)
 
+        // Build a CorsLayer from configuration. If `cors_allowed_origins`
+        // is set in config, use that whitelist; otherwise fall back to a
+        // sensible default (127.0.0.1:8081).
+        let mut cors_layer = CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers(Any);
+
+        let allow_credentials = config.cors_allow_credentials.unwrap_or(false);
+        if allow_credentials {
+            cors_layer = cors_layer.allow_credentials(true);
+        }
+
+        if let Some(origins) = config.cors_allowed_origins.clone() {
+            if origins.is_empty() {
+                cors_layer = cors_layer.allow_origin(Any);
+            } else if origins.len() == 1 {
+                match HeaderValue::from_str(&origins[0]) {
+                    Ok(hv) => {
+                        cors_layer =
+                            cors_layer.allow_origin(tower_http::cors::AllowOrigin::exact(hv))
+                    }
+                    Err(_) => cors_layer = cors_layer.allow_origin(Any),
+                }
+            } else {
+                let list: Vec<HeaderValue> = origins
+                    .into_iter()
+                    .filter_map(|s| HeaderValue::from_str(&s).ok())
+                    .collect();
+                if !list.is_empty() {
+                    cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::list(list));
+                } else {
+                    cors_layer = cors_layer.allow_origin(Any);
+                }
+            }
+        } else {
+            // Default single allowed origin for local dev
+            let origin = HeaderValue::from_static("http://127.0.0.1:8081");
+            cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::exact(origin));
+        }
+
+        let cors = cors_layer;
+
         let app = Router::new()
             .route("/scan", post(trigger_scan_handler))
             .route("/media", get(list_directory_handler))
@@ -182,7 +226,8 @@ fn main() {
             .route("/media/stream", get(stream_handler))
             .route("/media/image", get(stream_handler))
             .nest_service("/thumbnails", serve_thumbs)
-            .with_state(state.clone());
+            .with_state(state.clone())
+            .layer(cors);
 
         let host = config.host.unwrap_or_else(|| "127.0.0.1".to_string());
         let port = config.port.unwrap_or(8080);

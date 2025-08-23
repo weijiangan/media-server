@@ -68,19 +68,23 @@ pub async fn thumbnail_handler(
     let _ = tokio::fs::create_dir_all(&thumbs_dir).await;
 
     if let Some(tp) = entry.thumb_path.clone() {
-        let thumb_path = Path::new(&tp);
-        if thumb_path.exists() {
-            // Serve existing thumbnail file directly.
-            let file = File::open(thumb_path)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let stream = ReaderStream::new(file);
-            let body = StreamBody::new(stream);
-            let boxed = axum::body::boxed(body);
-            let mut res = Response::new(boxed);
-            res.headers_mut()
-                .insert("content-type", HeaderValue::from_static("image/jpeg"));
-            return Ok(res);
+        // We store thumbnail paths as URL paths under `/thumbnails/<name>`.
+        // Resolve the final segment and serve the corresponding file from
+        // the configured thumbnails directory.
+        if let Some(fname) = Path::new(&tp).file_name().and_then(|s| s.to_str()) {
+            let fs_path = thumbs_dir.join(fname);
+            if fs_path.exists() {
+                let file = File::open(&fs_path)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let stream = ReaderStream::new(file);
+                let body = StreamBody::new(stream);
+                let boxed = axum::body::boxed(body);
+                let mut res = Response::new(boxed);
+                res.headers_mut()
+                    .insert("content-type", HeaderValue::from_static("image/jpeg"));
+                return Ok(res);
+            }
         }
     }
 
@@ -200,7 +204,8 @@ pub async fn generate_thumbnail_handler(
                 mime_type: entry.mime_type.clone(),
                 size: entry.size,
                 tags: entry.tags.clone(),
-                thumb_path: Some(out_path.to_string_lossy().to_string()),
+                // store the URL path (server-visible) instead of filesystem path
+                thumb_path: Some(format!("/thumbnails/{}", out_name)),
                 width: Some(thumb.width() as i64),
                 height: Some(thumb.height() as i64),
                 duration_secs: entry.duration_secs,
@@ -297,7 +302,8 @@ pub async fn generate_thumbnail_handler(
                             mime_type: entry.mime_type.clone(),
                             size: entry.size,
                             tags: entry.tags.clone(),
-                            thumb_path: Some(out_path.to_string_lossy().to_string()),
+                            // store the URL path (server-visible)
+                            thumb_path: Some(format!("/thumbnails/{}", out_name)),
                             width: Some(thumb.width() as i64),
                             height: Some(thumb.height() as i64),
                             duration_secs: duration_secs_opt.or(entry.duration_secs),

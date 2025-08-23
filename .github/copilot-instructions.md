@@ -40,6 +40,16 @@
 	2. Storage/model changes
 		- Store thumbnails on disk under a configurable thumbnails directory (defaults follow XDG or `/var/cache`) using deterministic names (e.g., `<media_id>_<wxh>.jpg`). [UPDATED - static serving added, generator writes to configured dir]
 	   - Add nullable columns to `media` via lightweight migration: `width`, `height`, `duration_secs` (for videos), and `thumb_path` (relative path under `.thumbnails`). Keep data model backward compatible. [DONE]
+	- Add nullable columns to `media` via lightweight migration: `width`, `height`, `duration_secs` (for videos), and `thumb_path` (relative path under `.thumbnails`). Keep data model backward compatible. [DONE]
+
+	Recent updates (implemented)
+	- `thumb_path` now stores a server-visible URL path (for example `/thumbnails/<id>_<wxh>.jpg`) instead of an absolute filesystem path. The server resolves this URL to files inside the configured thumbnails directory when serving. This _removed_ previous backward-compatibility behavior by design. [DONE]
+	- Thumbnail generation writes to temporary files inside the configured thumbnails directory using a `.jpg` extension (e.g., `<id>_<wxh>.<nanos>.jpg`) and is atomically renamed into place (`<id>_<wxh>.jpg`) to avoid partial reads. This fixed earlier `.tmp` decoding errors. [DONE]
+	- Video poster extraction is controlled by a toggle: `ffmpeg_enabled` in `config` (default: false). When disabled, generate requests redirect to the expected static URL instead of attempting extraction. When enabled, the server uses configured `ffmpeg_path` / `ffprobe_path` (or system `ffmpeg`/`ffprobe`) to extract a frame, then stores the thumbnail and updates `duration_secs` when available. [DONE]
+	- Thumbnails directory resolution is configurable via `thumbnails_dir` in config and defaults to a sensible XDG or `/var/cache` location depending on effective UID. The directory is mounted at `/thumbnails` by the server. [DONE]
+	- A placeholder thumbnail `placeholder.jpg` is created at startup inside the configured thumbnails directory if missing. The generator redirects to `/thumbnails/placeholder.jpg` on ffmpeg failure or when ffmpeg is disabled. [DONE]
+	- A simple GC runs at startup to remove stale temp-like thumbnail files (pattern: multiple `.` before `.jpg`) older than 1 hour. This behavior can be hardened or made periodic in future work. [DONE]
+	- CORS whitelist is configurable: `cors_allowed_origins: Option<Vec<String>>` and `cors_allow_credentials: Option<bool>` were added to the config. The server builds a `CorsLayer` from these values (fallback to `http://127.0.0.1:8081`). [DONE]
 
 	3. Scanner updates
 	   - On scan (or first request), generate thumbnails for images if missing or stale; record `thumb_path`, `width`, `height`. [PARTIAL - scanner records fields but automatic thumbnail generation during scan not implemented]

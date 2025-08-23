@@ -10,4 +10,6 @@ pub struct AppConfig {
     pub ffmpeg_path: Option<String>,
     pub ffprobe_path: Option<String>,
     pub thumbnails_dir: Option<String>,
+    pub cors_allowed_origins: Option<Vec<String>>,
+    pub cors_allow_credentials: Option<bool>,
 }
