@@ -225,3 +225,185 @@ pub async fn list_children(
 
     Ok(out)
 }
+
+pub async fn list_children_advanced(
+    pool: SqlitePool,
+    parent_id: Option<i64>,
+    tags: Option<Vec<String>>, // if provided, we'll post-filter in Rust and paginate after filtering
+    type_filter: Option<&str>, // "file" | "directory"
+    kind_filter: Option<&str>, // "image" | "video" | "audio" | "other"
+    limit: Option<i64>,
+    offset: Option<i64>,
+    sort: Option<&str>,  // "name" | "created" | "size"
+    order: Option<&str>, // "asc" | "desc"
+) -> Result<Vec<MediaEntry>, sqlx::Error> {
+    // Build dynamic SQL safely by mapping only known parameters to SQL fragments.
+    let mut sql = String::from(
+        "SELECT id, name, path, parent_id, mime_type, size, tags, thumb_path, width, height, duration_secs, created_at FROM media WHERE parent_id IS ?",
+    );
+
+    // Type filter
+    if let Some(t) = type_filter {
+        match t {
+            "file" => sql.push_str(" AND mime_type IS NOT NULL"),
+            "directory" => sql.push_str(" AND mime_type IS NULL"),
+            _ => {}
+        }
+    }
+
+    // Kind filter
+    if let Some(k) = kind_filter {
+        match k {
+            "image" => sql.push_str(" AND mime_type LIKE 'image/%'"),
+            "video" => sql.push_str(" AND mime_type LIKE 'video/%'"),
+            "audio" => sql.push_str(" AND mime_type LIKE 'audio/%'"),
+            "other" => sql.push_str(
+                " AND mime_type IS NOT NULL AND mime_type NOT LIKE 'image/%' AND mime_type NOT LIKE 'video/%' AND mime_type NOT LIKE 'audio/%'",
+            ),
+            _ => {}
+        }
+    }
+
+    // Sorting
+    let sort_col = match sort.unwrap_or("name") {
+        "name" => "name",
+        "created" | "created_at" => "created_at",
+        "size" => "size",
+        _ => "name",
+    };
+    let ord = match order.unwrap_or("asc").to_ascii_lowercase().as_str() {
+        "asc" => "ASC",
+        "desc" => "DESC",
+        _ => "ASC",
+    };
+    sql.push_str(&format!(" ORDER BY {} {}", sort_col, ord));
+
+    let use_sql_pagination = tags.is_none();
+    if use_sql_pagination {
+        // Apply LIMIT/OFFSET only when we are not filtering by tags at the Rust layer.
+        let lim = limit.unwrap_or(100).max(0);
+        let off = offset.unwrap_or(0).max(0);
+        sql.push_str(" LIMIT ? OFFSET ?");
+
+        let q = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                String,
+                Option<i64>,
+                Option<String>,
+                Option<i64>,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                Option<i64>,
+                Option<i64>,
+                String,
+            ),
+        >(&sql)
+        .bind(parent_id)
+        .bind(lim)
+        .bind(off);
+
+        let rows = q.fetch_all(&pool).await?;
+
+        let mut out = Vec::new();
+        for r in rows {
+            let tags_vec: Option<Vec<String>> =
+                r.6.as_ref().and_then(|s| serde_json::from_str(s).ok());
+            out.push(MediaEntry {
+                id: r.0,
+                name: r.1,
+                path: r.2,
+                parent_id: r.3,
+                mime_type: r.4,
+                size: r.5,
+                created_at: r.11,
+                tags: tags_vec,
+                thumb_path: r.7,
+                width: r.8,
+                height: r.9,
+                duration_secs: r.10,
+            });
+        }
+        return Ok(out);
+    }
+
+    // Without SQL LIMIT/OFFSET, fetch all, filter tags in Rust, then paginate.
+    let q = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            String,
+        ),
+    >(&sql)
+    .bind(parent_id);
+
+    let rows = q.fetch_all(&pool).await?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        let tags_vec: Option<Vec<String>> = r.6.as_ref().and_then(|s| serde_json::from_str(s).ok());
+        out.push(MediaEntry {
+            id: r.0,
+            name: r.1,
+            path: r.2,
+            parent_id: r.3,
+            mime_type: r.4,
+            size: r.5,
+            created_at: r.11,
+            tags: tags_vec,
+            thumb_path: r.7,
+            width: r.8,
+            height: r.9,
+            duration_secs: r.10,
+        });
+    }
+
+    let mut filtered = if let Some(filter_tags) = tags {
+        out.into_iter()
+            .filter(|entry| {
+                if let Some(tlist) = &entry.tags {
+                    filter_tags.iter().all(|ft| tlist.contains(ft))
+                } else {
+                    false
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        out
+    };
+
+    // Apply pagination after filtering
+    let lim = limit.unwrap_or(100).max(0) as usize;
+    let off = offset.unwrap_or(0).max(0) as usize;
+    let end = off.saturating_add(lim);
+    let sliced = if off >= filtered.len() {
+        Vec::new()
+    } else if end >= filtered.len() {
+        filtered.split_off(off)
+    } else {
+        filtered[off..end].to_vec()
+    };
+
+    Ok(sliced)
+}
+
+pub async fn count_children(pool: SqlitePool, parent_id: i64) -> Result<i64, sqlx::Error> {
+    let count: i64 = query_scalar("SELECT COUNT(1) FROM media WHERE parent_id = ?1")
+        .bind(parent_id)
+        .fetch_one(&pool)
+        .await?;
+    Ok(count)
+}

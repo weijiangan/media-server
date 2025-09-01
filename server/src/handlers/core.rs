@@ -1,4 +1,5 @@
 use crate::db;
+use crate::models::MediaEntry;
 use crate::scanner;
 use crate::state::AppState;
 use axum::{extract::State, http::StatusCode, Json};
@@ -28,6 +29,48 @@ pub struct ListQuery {
     pub path: Option<String>,
     // comma-separated tags e.g. tags=tag1,tag2
     pub tags: Option<String>,
+    // new filters and pagination
+    pub r#type: Option<String>, // "file" | "directory"
+    pub kind: Option<String>,   // "image" | "video" | "audio" | "other"
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub sort: Option<String>,  // name | created | size
+    pub order: Option<String>, // asc | desc
+}
+
+// --- helpers to avoid duplication ---
+fn classify_kind(mime: Option<&str>) -> Option<&'static str> {
+    let mt = mime.unwrap_or("");
+    if mt.is_empty() {
+        return None;
+    }
+    if mt.starts_with("image/") {
+        Some("image")
+    } else if mt.starts_with("video/") {
+        Some("video")
+    } else if mt.starts_with("audio/") {
+        Some("audio")
+    } else {
+        Some("other")
+    }
+}
+
+fn to_enriched_json(e: &MediaEntry) -> serde_json::Value {
+    let mut v = serde_json::to_value(e).unwrap_or(json!({}));
+    let is_dir = e.mime_type.is_none();
+    if let serde_json::Value::Object(ref mut map) = v {
+        // Keep thumb_path as-is; do not add URL fields here
+        map.insert(
+            "type".to_string(),
+            serde_json::Value::String(if is_dir { "directory" } else { "file" }.to_string()),
+        );
+        if !is_dir {
+            if let Some(k) = classify_kind(e.mime_type.as_deref()) {
+                map.insert("kind".to_string(), serde_json::Value::String(k.to_string()));
+            }
+        }
+    }
+    v
 }
 
 pub async fn list_directory_handler(
@@ -65,69 +108,25 @@ pub async fn list_directory_handler(
             Some(entry) => {
                 // if directory (mime_type is None), list its children
                 if entry.mime_type.is_none() {
-                    let rows = db::list_children(pool, Some(entry.id), tags_vec)
-                        .await
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                    // enrich rows with thumbnail_url and stream_url
-                    let enriched: Vec<serde_json::Value> = rows
-                        .into_iter()
-                        .map(|e| {
-                            // default thumbnail size
-                            let thumb = e
-                                .thumb_path
-                                .clone()
-                                .map(|_| format!("/thumbnails/{}_200x200.jpg", e.id));
-                            let stream =
-                                if e.mime_type.as_deref().unwrap_or("").starts_with("image/") {
-                                    format!("/media/image?path={}", e.path)
-                                } else {
-                                    format!("/media/stream?path={}", e.path)
-                                };
-                            let mut v = serde_json::to_value(e).unwrap_or(json!({}));
-                            if let serde_json::Value::Object(ref mut map) = v {
-                                if let Some(t) = thumb {
-                                    map.insert(
-                                        "thumbnail_url".to_string(),
-                                        serde_json::Value::String(t),
-                                    );
-                                }
-                                map.insert(
-                                    "stream_url".to_string(),
-                                    serde_json::Value::String(stream),
-                                );
-                            }
-                            v
-                        })
-                        .collect();
+                    let rows = db::list_children_advanced(
+                        pool.clone(),
+                        Some(entry.id),
+                        tags_vec,
+                        q.r#type.as_deref(),
+                        q.kind.as_deref(),
+                        q.limit,
+                        q.offset,
+                        q.sort.as_deref(),
+                        q.order.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    let enriched: Vec<serde_json::Value> =
+                        rows.into_iter().map(|e| to_enriched_json(&e)).collect();
                     Ok(Json(json!({ "files": enriched })))
                 } else {
                     // file: return single enriched entry
-                    let v = serde_json::to_value(&entry).unwrap_or(json!({}));
-                    let v = if let serde_json::Value::Object(mut map) = v {
-                        if entry.thumb_path.is_some() {
-                            map.insert(
-                                "thumbnail_url".to_string(),
-                                serde_json::Value::String(format!(
-                                    "/thumbnails/{}_200x200.jpg",
-                                    entry.id
-                                )),
-                            );
-                        }
-                        let stream = if entry
-                            .mime_type
-                            .as_deref()
-                            .unwrap_or("")
-                            .starts_with("image/")
-                        {
-                            format!("/media/image?path={}", entry.path)
-                        } else {
-                            format!("/media/stream?path={}", entry.path)
-                        };
-                        map.insert("stream_url".to_string(), serde_json::Value::String(stream));
-                        serde_json::Value::Object(map)
-                    } else {
-                        v
-                    };
+                    let v = to_enriched_json(&entry);
                     Ok(Json(json!({ "files": [v] })))
                 }
             }
@@ -135,10 +134,23 @@ pub async fn list_directory_handler(
         }
     } else {
         // use parent_id (may be None) to list children
-        let rows = db::list_children(pool, q.parent_id, tags_vec)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        Ok(Json(json!({ "files": rows })))
+        let rows = db::list_children_advanced(
+            pool.clone(),
+            q.parent_id,
+            tags_vec,
+            q.r#type.as_deref(),
+            q.kind.as_deref(),
+            q.limit,
+            q.offset,
+            q.sort.as_deref(),
+            q.order.as_deref(),
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // enrich with type/kind and URLs
+        let enriched: Vec<serde_json::Value> =
+            rows.into_iter().map(|e| to_enriched_json(&e)).collect();
+        Ok(Json(json!({ "files": enriched })))
     }
 }
 
@@ -164,31 +176,7 @@ pub async fn get_file_details_handler(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         match opt {
             Some(entry) => {
-                // add thumbnail and stream URLs
-                let thumb_url = entry
-                    .thumb_path
-                    .clone()
-                    .map(|_| format!("/media/thumbnail?path={}", entry.path));
-                let stream_or_image = if entry
-                    .mime_type
-                    .as_deref()
-                    .unwrap_or("")
-                    .starts_with("image/")
-                {
-                    format!("/media/image?path={}", entry.path)
-                } else {
-                    format!("/media/stream?path={}", entry.path)
-                };
-                let mut val = serde_json::to_value(entry).unwrap_or(json!({}));
-                if let serde_json::Value::Object(ref mut map) = val {
-                    if let Some(tu) = thumb_url {
-                        map.insert("thumbnail_url".to_string(), serde_json::Value::String(tu));
-                    }
-                    map.insert(
-                        "stream_url".to_string(),
-                        serde_json::Value::String(stream_or_image),
-                    );
-                }
+                let val = to_enriched_json(&entry);
                 Ok(Json(val))
             }
             _ => Err((StatusCode::NOT_FOUND, "File not found".to_string())),
@@ -206,33 +194,7 @@ pub async fn get_file_details_handler(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         match opt {
-            Some(entry) => {
-                let thumb_url = entry
-                    .thumb_path
-                    .clone()
-                    .map(|_| format!("/media/thumbnail?path={}", entry.path));
-                let stream_or_image = if entry
-                    .mime_type
-                    .as_deref()
-                    .unwrap_or("")
-                    .starts_with("image/")
-                {
-                    format!("/media/image?path={}", entry.path)
-                } else {
-                    format!("/media/stream?path={}", entry.path)
-                };
-                let mut val = serde_json::to_value(entry).unwrap_or(json!({}));
-                if let serde_json::Value::Object(ref mut map) = val {
-                    if let Some(tu) = thumb_url {
-                        map.insert("thumbnail_url".to_string(), serde_json::Value::String(tu));
-                    }
-                    map.insert(
-                        "stream_url".to_string(),
-                        serde_json::Value::String(stream_or_image),
-                    );
-                }
-                Ok(Json(val))
-            }
+            Some(entry) => Ok(Json(to_enriched_json(&entry))),
             _ => Err((StatusCode::NOT_FOUND, "File not found".to_string())),
         }
     }

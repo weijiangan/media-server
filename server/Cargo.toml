@@ -16,11 +16,15 @@ config = "0.13"
 # added for streaming and thumbnails
 tokio-util = { version = "0.7", features = ["io"] }
 image = "0.24"
+# concurrency/stream helpers
+futures = "0.3"
 # static file serving
 tower-http = { version = "0.3", features = ["fs", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 dirs = "4"
 nix = "0.26"
+httpdate = "1.0"
+sha2 = "0.10"
 
 [dev-dependencies]

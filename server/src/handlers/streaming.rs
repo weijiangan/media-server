@@ -4,8 +4,11 @@ use axum::body::StreamBody;
 use axum::http::{HeaderValue, Request, StatusCode as AxumStatusCode};
 use axum::response::Response;
 use axum::{extract::State, http::StatusCode};
+use httpdate::fmt_http_date;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 use tokio::io::AsyncSeekExt;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
@@ -52,6 +55,32 @@ pub async fn stream_handler(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let total_size = meta.len();
+    // Try to get modified time
+    let modified = meta.modified().ok();
+
+    // Compute a simple ETag using size + mtime (if available) + path
+    let mut hasher = Sha256::new();
+    hasher.update(entry.path.as_bytes());
+    hasher.update(&total_size.to_le_bytes());
+    if let Some(m) = modified {
+        if let Ok(dur) = m.duration_since(UNIX_EPOCH) {
+            hasher.update(&dur.as_secs().to_le_bytes());
+            hasher.update(&dur.subsec_nanos().to_le_bytes());
+        }
+    }
+    let result = hasher.finalize();
+    let etag = format!("\"{:x}\"", result);
+
+    // Honor If-None-Match
+    if let Some(if_none) = req.headers().get("if-none-match") {
+        if if_none.to_str().unwrap_or("") == etag {
+            let mut resp = Response::new(axum::body::boxed(axum::body::Empty::new()));
+            *resp.status_mut() = axum::http::StatusCode::NOT_MODIFIED;
+            resp.headers_mut()
+                .insert("ETag", HeaderValue::from_str(&etag).unwrap());
+            return Ok(resp);
+        }
+    }
 
     // Parse and validate Range header (single range only)
     let (range_start, range_end, is_partial) = if let Some(hv) = req.headers().get("range") {
@@ -121,6 +150,15 @@ pub async fn stream_handler(
     let mut res = Response::new(boxed);
     res.headers_mut()
         .insert("Accept-Ranges", HeaderValue::from_static("bytes"));
+    res.headers_mut()
+        .insert("ETag", HeaderValue::from_str(&etag).unwrap());
+    if let Some(m) = modified {
+        let s = fmt_http_date(m);
+        res.headers_mut().insert(
+            "Last-Modified",
+            HeaderValue::from_str(&s).unwrap_or(HeaderValue::from_static("")),
+        );
+    }
     let ctype = entry
         .mime_type
         .clone()

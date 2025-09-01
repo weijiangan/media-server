@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod core;
 pub mod streaming;
 pub mod thumbnails;
