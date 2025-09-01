@@ -11,6 +11,7 @@ import "react-native-reanimated";
 import { Colors } from "@/constants/Colors";
 
 import { useColorScheme } from "@/hooks/useColorScheme";
+import { GlobalContextProvider } from "@/components/GlobalContext";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -24,9 +25,10 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <Head>
-        <style>{`
+    <GlobalContextProvider>
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        <Head>
+          <style>{`
           body {
             background-color: ${
               colorScheme === "dark"
@@ -35,12 +37,26 @@ export default function RootLayout() {
             };
           }
         `}</style>
-      </Head>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="+not-found" />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+        </Head>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="+not-found" />
+          <Stack.Screen
+            name="video/[fileId]"
+            options={{ headerTransparent: true }}
+          />
+          <Stack.Screen
+            name="image/[fileId]"
+            options={{ headerTransparent: true }}
+          />
+        </Stack>
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    </GlobalContextProvider>
   );
 }
+
+export const unstable_settings = {
+  // Ensure any route can link back to `/`
+  initialRouteName: "(tabs)",
+};
