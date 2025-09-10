@@ -1,9 +1,9 @@
 {
-  "db_path": "media.db",
-  "directory_to_scan": "/Users/be4091/Desktop",
+  "db_path": "/var/lib/media-server/media.db",
+  "directory_to_scan": "/home/user/media",
   "ffmpeg_enabled": true,
-  "thumbnails_dir": "/Users/be4091/Learn/media-server/server/.thumbnails",
+  "thumbnails_dir": "/var/cache/media-server/thumbnails",
   "cors_allowed_origins": [],
   "host": "0.0.0.0",
-  "client_dist_dir": "/Users/be4091/Learn/media-server/client/dist"
+  "client_dist_dir": "/usr/share/media-server/client/dist"
 }
