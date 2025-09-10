@@ -1,0 +1,9 @@
+.testView {
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+}
+
+.testView > * {
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+}

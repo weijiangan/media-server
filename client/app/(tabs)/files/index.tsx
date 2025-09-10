@@ -1,61 +1,43 @@
 import {
+  Dimensions,
   FlatList,
   ImageBackground,
-  Platform,
   StyleSheet,
   TouchableOpacity,
-  View,
 } from "react-native";
 
 import { ThemedText } from "@/components/ThemedText";
 import { ThemedView } from "@/components/ThemedView";
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import {
   Href,
   Link,
   Stack,
+  useFocusEffect,
   useLocalSearchParams,
-  useRouter,
 } from "expo-router";
-import { API_HOST } from "@/constants/Config";
-
-interface MediaItem {
-  created_at: string;
-  duration_secs: number;
-  height: number;
-  id: number;
-  mime_type: string | null;
-  name: string;
-  parent_id: number | null;
-  path: string;
-  size: number;
-  tags: string | null;
-  thumb_path: string | null;
-  type: "file" | "directory";
-  width: number;
-}
+import { API_BASE_URL } from "@/constants/Config";
+import { GlobalContext } from "@/components/GlobalContext";
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const statuses = ["init", "loading", "success", "error"] as const;
 type Status = (typeof statuses)[number];
 
 export default function HomeScreen() {
-  const [data, setData] = useState<{ files: MediaItem[] }>();
+  const { globalState, setGlobalState } = useContext(GlobalContext);
   const searchParams = useLocalSearchParams();
-  const prevPathId = useRef(searchParams.pathId);
+  const currentPathId = (searchParams.pathId as string) ?? "/";
+  const prevPathId = useRef(currentPathId);
   const status = useRef<Status>("init");
 
   useEffect(() => {
-    if (
-      prevPathId.current === searchParams.pathId &&
-      status.current !== "init"
-    ) {
+    if (prevPathId.current === currentPathId && status.current !== "init") {
       return;
     }
 
-    let url = new URL(`${API_HOST}/media`);
-    if (searchParams.pathId) {
-      url.searchParams.append("parent_id", searchParams.pathId as string);
+    let url = new URL(`${API_BASE_URL}/media`);
+    if (currentPathId !== "/") {
+      url.searchParams.append("parent_id", currentPathId);
     }
 
     let options = {
@@ -71,7 +53,10 @@ export default function HomeScreen() {
     fetch(url, options)
       .then((res) => res.json())
       .then((json) => {
-        setData(json);
+        setGlobalState((prev) => ({
+          ...prev,
+          files: { ...prev.files, [currentPathId]: json.files },
+        }));
         status.current = "success";
       })
       .catch((err) => {
@@ -79,19 +64,27 @@ export default function HomeScreen() {
         status.current = "error";
       });
 
-    prevPathId.current = searchParams.pathId;
+    prevPathId.current = currentPathId;
+  });
+
+  const { width } = Dimensions.get("window");
+  const [numColumns, setNumColumns] = useState(3);
+
+  useFocusEffect(() => {
+    const newNumColumns = Math.floor(width / 115);
+    if (newNumColumns !== numColumns) {
+      setNumColumns(newNumColumns);
+    }
   });
 
   return (
-    <ThemedView>
-      <Stack.Screen
-        options={{ title: (searchParams.pathId as string) ?? "Files" }}
-      ></Stack.Screen>
+    <ThemedView style={{ flex: 1 }}>
+      <Stack.Screen options={{ title: currentPathId ?? "Files" }} />
       <FlatList
-        numColumns={2}
+        numColumns={numColumns}
         contentContainerStyle={{ gap: 1 }}
         columnWrapperStyle={{ gap: 1 }}
-        data={data?.files?.filter(
+        data={globalState?.files?.[currentPathId]?.filter(
           (item) =>
             item.mime_type?.startsWith("image/") ||
             item.mime_type?.startsWith("video/") ||
@@ -99,26 +92,35 @@ export default function HomeScreen() {
         )}
         renderItem={({ item }) => {
           let href: Href = "/files";
-          if (item.mime_type?.startsWith("video/")) {
-            href = { pathname: `/video/[fileId]`, params: { fileId: item.id } };
-          } else if (item.mime_type?.startsWith("image/")) {
-            href = { pathname: `/image/[fileId]`, params: { fileId: item.id } };
+          if (
+            item.mime_type?.startsWith("video/") ||
+            item.mime_type?.startsWith("image/")
+          ) {
+            href = {
+              pathname: `/media-viewer/[fileId]`,
+              params: { fileId: item.id, pathId: currentPathId },
+            };
           } else if (item.type === "directory") {
-            href = { pathname: `/files`, params: { pathId: 1 } };
+            href = { pathname: `/files`, params: { pathId: item.id } };
           }
-          // else {
-          //   href = `/file/[fileId]`;
-          // }
+
           return (
             <Link push href={href} asChild>
-              <TouchableOpacity style={{ flex: 1 }}>
+              <TouchableOpacity
+                style={{
+                  aspectRatio: 3 / 4,
+                  width: (width - (numColumns - 1)) / numColumns,
+                }}
+              >
                 {item.mime_type ? (
                   <ImageBackground
-                    style={{ height: 200 }}
+                    resizeMode="cover"
+                    style={{ flex: 1 }}
                     source={{
                       uri:
-                        (item.thumb_path && `${API_HOST}${item.thumb_path}`) ||
-                        `${API_HOST}/media/thumbnail?id=${item.id}`,
+                        (item.thumb_path &&
+                          `${API_BASE_URL}${item.thumb_path}`) ||
+                        `${API_BASE_URL}/media/thumbnail?id=${item.id}`,
                     }}
                   />
                 ) : (

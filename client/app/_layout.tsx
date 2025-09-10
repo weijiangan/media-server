@@ -12,6 +12,7 @@ import { Colors } from "@/constants/Colors";
 
 import { useColorScheme } from "@/hooks/useColorScheme";
 import { GlobalContextProvider } from "@/components/GlobalContext";
+import "@/styles/global.css";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -42,11 +43,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="+not-found" />
           <Stack.Screen
-            name="video/[fileId]"
-            options={{ headerTransparent: true }}
-          />
-          <Stack.Screen
-            name="image/[fileId]"
+            name="media-viewer/[fileId]"
             options={{ headerTransparent: true }}
           />
         </Stack>
