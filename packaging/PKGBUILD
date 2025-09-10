@@ -4,7 +4,6 @@ pkgrel=1
 pkgdesc="Media server with thumbnails, streaming and REST API"
 arch=('x86_64' 'aarch64')
 url="https://example.com/media-server"
-license=('MIT')
 depends=('ffmpeg')
 makedepends=('rust' 'cargo' 'pkg-config' 'openssl' 'nodejs' 'npm')
 provides=('media-server')
