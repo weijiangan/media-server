@@ -12,4 +12,9 @@ pub struct AppConfig {
     pub thumbnails_dir: Option<String>,
     pub cors_allowed_origins: Option<Vec<String>>,
     pub cors_allow_credentials: Option<bool>,
+    // If explicitly false, CORS middleware is not installed at all
+    pub cors_enabled: Option<bool>,
+    // Optional directory to serve the built SPA (client/dist). When present the server
+    // will mount the client as a fallback for non-API routes (history-api fallback).
+    pub client_dist_dir: Option<String>,
 }

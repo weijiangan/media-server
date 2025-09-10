@@ -15,8 +15,8 @@ use tracing_subscriber;
 use clap::{Arg, Command as ClapApp};
 
 use server::startup::{
-    build_cors, build_thumbnails_service, init_db, load_config, prepare_thumbnails_cache,
-    resolve_thumbnails_dir,
+    build_client_service, build_cors, build_thumbnails_service, init_db, load_config,
+    prepare_thumbnails_cache, resolve_client_dist_dir, resolve_thumbnails_dir,
 };
 
 fn main() {
@@ -78,6 +78,7 @@ fn main() {
             ffmpeg_path: config.ffmpeg_path.clone(),
             ffprobe_path: config.ffprobe_path.clone(),
             thumbnails_dir: Some(thumbnails_dir_path.to_string_lossy().to_string()),
+            client_dist_dir: config.client_dist_dir.clone(),
             // regeneration controls
             regen_semaphore: Arc::new(Semaphore::new(4)),
             in_flight: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -88,9 +89,15 @@ fn main() {
         let serve_thumbs = build_thumbnails_service(thumbnails_dir_path.clone());
         // (previously created serve_thumbs above)
 
-        let cors = build_cors(&config);
+        let cors_opt = match build_cors(&config) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("CORS configuration error: {}", e);
+                std::process::exit(2);
+            }
+        };
 
-        let app = Router::new()
+        let mut app = Router::new()
             .route("/scan", post(trigger_scan_handler))
             .route("/media", get(list_directory_handler))
             .route("/media/details", get(get_file_details_handler))
@@ -103,8 +110,18 @@ fn main() {
             .route("/media/stream", get(stream_handler))
             .route("/media/image", get(stream_handler))
             .nest_service("/thumbnails", serve_thumbs)
-            .with_state(state.clone())
-            .layer(cors);
+            .with_state(state.clone());
+        // If client dist is configured, mount it as a fallback SPA service
+        if let Some(cd) = resolve_client_dist_dir(&config) {
+            let client_router = build_client_service(cd);
+            app = app.merge(client_router);
+        }
+        if let Some(cors_layer) = cors_opt {
+            app = app.layer(cors_layer);
+        }
+
+        // Log a concise startup summary
+        server::startup::log_startup_info(&config);
 
         let host = config.host.unwrap_or_else(|| "127.0.0.1".to_string());
         let port = config.port.unwrap_or(8080);

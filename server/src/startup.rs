@@ -6,6 +6,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::path::{Path, PathBuf};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
+use axum::response::IntoResponse;
 
 pub fn load_config(cli_path: Option<PathBuf>) -> Result<AppConfig, Box<dyn std::error::Error>> {
     use ::config::{builder::DefaultState, ConfigBuilder, File};
@@ -122,6 +123,45 @@ pub fn resolve_thumbnails_dir(config: &AppConfig) -> PathBuf {
     }
 }
 
+pub fn resolve_client_dist_dir(config: &AppConfig) -> Option<PathBuf> {
+    if let Some(d) = config.client_dist_dir.clone() {
+        Some(PathBuf::from(d))
+    } else {
+        None
+    }
+}
+
+/// Build a service that serves static client files, with a fallback to index.html
+/// for SPA client-side routing. The caller should mount this under `/` or `/app`.
+pub fn build_client_service(client_dist: PathBuf) -> axum::Router {
+    // Serve static files for the SPA, and fallback to index.html for client-side routing.
+    let static_svc = get_service(ServeDir::new(client_dist.clone())).handle_error(|e: std::io::Error| async move {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Unhandled internal error: {}", e),
+        )
+    });
+
+    // fallback handler that returns index.html
+    let fallback = move || {
+        let cd = client_dist.clone();
+        async move {
+            let idx = cd.join("index.html");
+            match tokio::fs::read(idx).await {
+                Ok(bytes) => (
+                    axum::http::StatusCode::OK,
+                    [("content-type", "text/html; charset=utf-8")],
+                    bytes,
+                )
+                    .into_response(),
+                Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+            }
+        }
+    };
+
+    axum::Router::new().fallback(static_svc).route("/", axum::routing::get(fallback))
+}
+
 pub fn prepare_thumbnails_cache(thumbnails_dir_path: &Path) {
     let _ = std::fs::create_dir_all(thumbnails_dir_path);
     tracing::info!("Thumbnails directory: {}", thumbnails_dir_path.display());
@@ -166,7 +206,8 @@ pub fn build_thumbnails_service(thumbnails_dir_path: PathBuf) -> MethodRouter {
     })
 }
 
-pub fn build_cors(config: &AppConfig) -> CorsLayer {
+pub fn build_cors(config: &AppConfig) -> Result<Option<CorsLayer>, String> {
+    if let Some(false) = config.cors_enabled { return Ok(None); }
     let mut cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers(Any);
@@ -175,31 +216,55 @@ pub fn build_cors(config: &AppConfig) -> CorsLayer {
         cors_layer = cors_layer.allow_credentials(true);
     }
 
+    // Decide whether config explicitly requests Any via an empty list
+    let origin_is_any = matches!(config.cors_allowed_origins.as_ref(), Some(v) if v.is_empty());
+
+    // If credentials are requested, disallow Any origins (browsers reject this combination)
+    if config.cors_allow_credentials.unwrap_or(false) && origin_is_any {
+        return Err("Invalid CORS configuration: `cors_allow_credentials = true` cannot be used with wildcard/Any origins. Use explicit origins when credentials are required.".to_string());
+    }
+
+    // Build the origin policy strictly: parse provided values or fail.
     if let Some(origins) = config.cors_allowed_origins.clone() {
         if origins.is_empty() {
             cors_layer = cors_layer.allow_origin(Any);
         } else if origins.len() == 1 {
-            match HeaderValue::from_str(&origins[0]) {
-                Ok(hv) => {
-                    cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::exact(hv))
-                }
-                Err(_) => cors_layer = cors_layer.allow_origin(Any),
-            }
+            // Strict parse: return Err if origin header value is invalid
+            let hv = HeaderValue::from_str(&origins[0]).map_err(|_| {
+                format!("Invalid CORS origin value in config: '{}'", origins[0])
+            })?;
+            cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::exact(hv));
         } else {
-            let list: Vec<HeaderValue> = origins
-                .into_iter()
-                .filter_map(|s| HeaderValue::from_str(&s).ok())
-                .collect();
-            if !list.is_empty() {
-                cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::list(list));
-            } else {
-                cors_layer = cors_layer.allow_origin(Any);
+            let mut list: Vec<HeaderValue> = Vec::new();
+            for s in origins.into_iter() {
+                let hv = HeaderValue::from_str(&s).map_err(|_| format!("Invalid CORS origin value in config: '{}'", s))?;
+                list.push(hv);
             }
+            cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::list(list));
         }
     } else {
-        let origin = HeaderValue::from_static("http://127.0.0.1:8081");
-        cors_layer = cors_layer.allow_origin(tower_http::cors::AllowOrigin::exact(origin));
+        // Require explicit configuration to avoid accidental permissive defaults.
+        return Err("No CORS origins configured: set `cors_allowed_origins` in config.json (use an empty array for Any), or set `cors_enabled = false` to disable CORS.".to_string());
     }
 
-    cors_layer
+    Ok(Some(cors_layer))
+}
+
+/// Log a concise startup summary: resolved CORS policy and client dist directory.
+pub fn log_startup_info(config: &AppConfig) {
+    let cors_desc = if matches!(config.cors_enabled, Some(false)) {
+        "disabled".to_string()
+    } else if let Some(ref origins) = config.cors_allowed_origins {
+        if origins.is_empty() {
+            "Any".to_string()
+        } else {
+            format!("Allowed: {}", origins.join(", "))
+        }
+    } else {
+        "unspecified".to_string()
+    };
+
+    let creds = config.cors_allow_credentials.unwrap_or(false);
+    let client_dir_log = config.client_dist_dir.clone().unwrap_or_else(|| "<none>".to_string());
+    tracing::info!("CORS: {} (allow_credentials={}); client_dist_dir={}", cors_desc, creds, client_dir_log);
 }

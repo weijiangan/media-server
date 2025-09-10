@@ -12,6 +12,7 @@ pub struct AppState {
     pub ffmpeg_path: Option<String>,
     pub ffprobe_path: Option<String>,
     pub thumbnails_dir: Option<String>,
+    pub client_dist_dir: Option<String>,
     // Regeneration controls
     pub regen_semaphore: Arc<Semaphore>,
     // Track in-flight keys mapping to waiters so concurrent callers can wait for

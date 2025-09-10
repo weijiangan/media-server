@@ -1,0 +1,15 @@
+[Unit]
+Description=Media Server
+After=network.target
+
+[Service]
+Type=simple
+User=media
+Group=media
+WorkingDirectory=/var/lib/media-server
+ExecStart=/usr/bin/media-server --config /etc/media-server/config.json
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

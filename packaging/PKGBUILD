@@ -1,0 +1,66 @@
+pkgname=media-server
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Media server with thumbnails, streaming and REST API"
+arch=('x86_64' 'aarch64')
+url="https://example.com/media-server"
+license=('MIT')
+depends=('ffmpeg')
+makedepends=('rust' 'cargo' 'pkg-config' 'openssl' 'nodejs' 'npm')
+provides=('media-server')
+source=()
+noextract=()
+
+build() {
+  cd "$srcdir/server"
+  # Use a release build; --locked can be removed if Cargo.lock should be ignored
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/server"
+
+  install -Dm755 "target/release/server" "$pkgdir/usr/bin/media-server"
+
+  # Install default configuration (admins should edit /etc/media-server/config.json)
+  install -Dm644 "config.json" "$pkgdir/etc/media-server/config.json"
+
+  # Systemd unit
+  install -Dm644 "../packaging/media-server.service" "$pkgdir/usr/lib/systemd/system/media-server.service"
+
+  # Directories for runtime data
+  install -d "$pkgdir/var/lib/media-server"
+  install -d "$pkgdir/var/log/media-server"
+
+  # Build frontend if present
+  if [ -d "$srcdir/client" ]; then
+    cd "$srcdir/client"
+    # Determine package manager: bun, yarn, or npm
+    if command -v bun >/dev/null 2>&1; then
+      PM="bun"
+    elif command -v yarn >/dev/null 2>&1; then
+      PM="yarn"
+    else
+      PM="npm"
+    fi
+
+    echo "Building frontend with $PM"
+    if [ "$PM" = "bun" ]; then
+      bun install
+      bun build:web
+    elif [ "$PM" = "yarn" ]; then
+      yarn install --frozen-lockfile || yarn install
+      yarn build:web
+    else
+      npm ci || npm install
+      npm run build:web
+    fi
+
+    # Copy dist to shared data
+    if [ -d "dist" ]; then
+      install -d "$pkgdir/usr/share/media-server/client/dist"
+      cp -a dist/. "$pkgdir/usr/share/media-server/client/dist/"
+    fi
+    cd "$srcdir/server"
+  fi
+}

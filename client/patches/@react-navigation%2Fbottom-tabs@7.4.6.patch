@@ -1,0 +1,13 @@
+diff --git a/lib/module/views/BottomTabView.js b/lib/module/views/BottomTabView.js
+index 39d48b86e7ba767e2417817f2d5812459a2676c2..80418d105dc9523271141150caddbe7610b9adad 100644
+--- a/lib/module/views/BottomTabView.js
++++ b/lib/module/views/BottomTabView.js
+@@ -249,7 +249,6 @@ export function BottomTabView(props) {
+ const styles = StyleSheet.create({
+   screens: {
+     flex: 1,
+-    overflow: 'hidden'
+   }
+ });
+ //# sourceMappingURL=BottomTabView.js.map
+\ No newline at end of file

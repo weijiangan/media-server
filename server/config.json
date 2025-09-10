@@ -1,8 +1,9 @@
 {
   "db_path": "media.db",
-  "directory_to_scan": "/Users/be4091/Learn/media-server/server/media",
+  "directory_to_scan": "/Users/be4091/Desktop",
   "ffmpeg_enabled": true,
   "thumbnails_dir": "/Users/be4091/Learn/media-server/server/.thumbnails",
-  "cors_allowed_origins": ["http://localhost:8081", "http://192.168.0.11:8081"],
-  "host": "0.0.0.0"
+  "cors_allowed_origins": [],
+  "host": "0.0.0.0",
+  "client_dist_dir": "/Users/be4091/Learn/media-server/client/dist"
 }

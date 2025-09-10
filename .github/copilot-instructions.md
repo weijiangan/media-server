@@ -49,6 +49,7 @@
 	- Thumbnails directory is configurable (`thumbnails_dir`) and statically served at `/thumbnails`. [DONE]
 	- Placeholder thumbnail creation and a startup GC for stale temp-like thumbnail files are implemented. [DONE]
 	- CORS is configurable via `cors_allowed_origins` and `cors_allow_credentials`. [DONE]
+	- CORS is configurable via `cors_allowed_origins` and `cors_allow_credentials`. The server now uses a strict behaviour: CORS must be explicitly configured (or disabled via `cors_enabled = false`) and startup validation rejects `cors_allow_credentials = true` when origins are wildcard/Any. [DONE]
   - ETag and Last-Modified headers:
     - Streaming: metadata-based ETag (SHA-256 over path+size+mtime) and Last-Modified headers added; honors `If-None-Match` and returns 304 when matched. [DONE]
     - Thumbnails: manual-serving path sets ETag and Last-Modified; static `/thumbnails` mount (ServeDir) handles conditional GETs. [DONE]
@@ -75,10 +76,14 @@
 
 	7. Client (follow-up)
 	   - Update React client to render grid with thumbnails and open viewer that uses `image_url` or `stream_url` from details. [PENDING]
+	7. Client (follow-up)
+	   - Update React client to render grid with thumbnails and open viewer that uses `image_url` or `stream_url` from details. [PENDING]
+	   - Note: the React SPA in `client/` builds into `client/dist/`. Consider serving `client/dist` from the server (static ServeDir) in production or using a reverse-proxy. The server already supports mounting static directories via `tower-http::services::ServeDir` (see `/thumbnails` mounting) so adding a `/.` or `/app` static route is straightforward. [INFO]
 
 	In progress / Completed items
 	- [x] Serve static thumbnails from the configured thumbnails directory mounted at `/thumbnails` using `tower-http` ServeDir.
 	- [x] Responses now include `type`/`kind`; URLs are not embedded to avoid hardcoding sizes. Use `/media/thumbnail?id|path&w&h` as needed. [CURRENT]
+	- [x] CORS behaviour: strict-mode implemented. `cors_allowed_origins` must be present (use empty array for Any) or set `cors_enabled=false` to disable CORS; invalid combinations (credentials + Any) cause startup errors. [NEW]
 	- [x] Added `image` and `tokio-util` dependencies and implemented generation code paths.
 	- [x] Implemented `GET /media/generate_thumbnail` that writes thumbnails and upserts DB thumb_path (best-effort) then redirects to the static URL.
 	- [x] Implemented `GET /media/thumbnail` as a fallback which serves existing thumbnails or redirects clients to the generator endpoint.
@@ -118,6 +123,12 @@
 	6. Cleanup
 	   - Remove any remaining compiler warnings and tidy code (unused vars, minor refactors).
     - Add Cache-Control headers to generated thumbnails and streamed responses (long-lived for content-addressed thumbs; short-lived for originals). [TODO]
+
+
+	Additional small ops + docs (short-term)
+	- Add `config.example.json` with recommended dev and production CORS examples (dev: explicit localhost origin or `cors_enabled=false` if served same-origin; prod: explicit origins). [TODO]
+	- Add a one-line startup log that prints the chosen CORS policy (e.g. "CORS: disabled" | "CORS: Any" | "CORS: [list]") to help ops verify settings on boot. [TODO]
+	- Optionally add a server static mount for the built SPA `client/dist` (e.g. mount ServeDir at `/` or `/app`) and document recommended reverse-proxy patterns. [TODO]
 
 	Priority Notes
 	- Urgent: Harden streaming Range behavior and ensure accurate Content-Length/Content-Range.
