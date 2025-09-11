@@ -1,0 +1,9 @@
+{
+  "db_path": "media.db",
+  "directory_to_scan": "/home/user/media",
+  "ffmpeg_enabled": true,
+  "thumbnails_dir": "./.thumbnails",
+  "cors_allowed_origins": [],
+  "host": "0.0.0.0",
+  "client_dist_dir": "../client/dist"
+}

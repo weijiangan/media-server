@@ -18,6 +18,14 @@ pub fn load_config(cli_path: Option<PathBuf>) -> Result<AppConfig, Box<dyn std::
     if let Some(p) = cli_path {
         chosen = Some(p);
     } else {
+        // If a local ./config.dev.json exists, prefer it (presence-only selection).
+        if let Ok(cwd) = std::env::current_dir() {
+            let dev = cwd.join("config.dev.json");
+            if dev.exists() {
+                chosen = Some(dev);
+            }
+        }
+
         // Strict search: only look for .json files in known locations
         let push_if_exists = |p: PathBuf| -> Option<PathBuf> {
             if p.exists() {
@@ -28,9 +36,11 @@ pub fn load_config(cli_path: Option<PathBuf>) -> Result<AppConfig, Box<dyn std::
         };
 
         // Prefer ./config.json (monorepo server dir)
+        if chosen.is_none() {
         if let Ok(cwd) = std::env::current_dir() {
             if let Some(found) = push_if_exists(cwd.join("config.json")) {
                 chosen = Some(found);
+                }
             }
         }
         // server/config.json
