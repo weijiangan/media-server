@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use axum::response::IntoResponse;
+use axum::http::StatusCode;
+use axum::extract::Path as AxumPath;
+use mime_guess::from_path;
 
 pub fn load_config(cli_path: Option<PathBuf>) -> Result<AppConfig, Box<dyn std::error::Error>> {
     use ::config::{builder::DefaultState, ConfigBuilder, File};
@@ -37,9 +40,9 @@ pub fn load_config(cli_path: Option<PathBuf>) -> Result<AppConfig, Box<dyn std::
 
         // Prefer ./config.json (monorepo server dir)
         if chosen.is_none() {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Some(found) = push_if_exists(cwd.join("config.json")) {
-                chosen = Some(found);
+            if let Ok(cwd) = std::env::current_dir() {
+                if let Some(found) = push_if_exists(cwd.join("config.json")) {
+                    chosen = Some(found);
                 }
             }
         }
@@ -144,32 +147,77 @@ pub fn resolve_client_dist_dir(config: &AppConfig) -> Option<PathBuf> {
 /// Build a service that serves static client files, with a fallback to index.html
 /// for SPA client-side routing. The caller should mount this under `/` or `/app`.
 pub fn build_client_service(client_dist: PathBuf) -> axum::Router {
-    // Serve static files for the SPA, and fallback to index.html for client-side routing.
-    let static_svc = get_service(ServeDir::new(client_dist.clone())).handle_error(|e: std::io::Error| async move {
-        (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Unhandled internal error: {}", e),
-        )
-    });
+	// Serve static files for the SPA, with a fallback to index.html for client-side routing.
+    let cd = std::sync::Arc::new(client_dist.clone());
 
-    // fallback handler that returns index.html
-    let fallback = move || {
-        let cd = client_dist.clone();
+    // Root handler: always serve the SPA index.html for the exact root path
+    // Make separate Arc clones so each closure takes ownership independently.
+    let cd_root = cd.clone();
+    let cd_spa = cd.clone();
+
+    let root_handler = move || {
+        let cd = cd_root.clone();
         async move {
-            let idx = cd.join("index.html");
-            match tokio::fs::read(idx).await {
-                Ok(bytes) => (
-                    axum::http::StatusCode::OK,
-                    [("content-type", "text/html; charset=utf-8")],
-                    bytes,
-                )
-                    .into_response(),
-                Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+            let target = cd.as_ref().join("index.html");
+            match tokio::fs::read(&target).await {
+                Ok(bytes) => {
+                    let mime = from_path(&target).first_or_octet_stream().to_string();
+                    (
+                        StatusCode::OK,
+                        [("content-type", mime.as_str())],
+                        bytes,
+                    )
+                        .into_response()
+                }
+                Err(_) => StatusCode::NOT_FOUND.into_response(),
             }
         }
     };
 
-    axum::Router::new().fallback(static_svc).route("/", axum::routing::get(fallback))
+    // Handler for all other paths under the SPA: try to serve the requested file,
+    // otherwise fall back to index.html so the client router can handle it.
+    let spa_handler = move |AxumPath(req_path): AxumPath<String>| {
+        let cd = cd_spa.clone();
+        async move {
+            // Basic sanitization: reject attempts to traverse upwards.
+            if req_path.contains("..") {
+                return (StatusCode::BAD_REQUEST, "Invalid path".to_string()).into_response();
+            }
+
+            // Normalize requested path: empty or "/" -> index.html
+            let normalized = if req_path.is_empty() || req_path == "/" {
+                "index.html".to_string()
+            } else {
+                req_path.trim_start_matches('/').to_string()
+            };
+
+            let candidate = cd.as_ref().join(&normalized);
+
+            // If requested file exists and is a file, serve it; otherwise serve index.html
+            let target = if tokio::fs::metadata(&candidate).await.map(|m| m.is_file()).unwrap_or(false) {
+                candidate
+            } else {
+                cd.as_ref().join("index.html")
+            };
+
+            match tokio::fs::read(&target).await {
+                Ok(bytes) => {
+                    let mime = from_path(&target).first_or_octet_stream().to_string();
+                    (
+                        StatusCode::OK,
+                        [("content-type", mime.as_str())],
+                        bytes,
+                    )
+                        .into_response()
+                }
+                Err(_) => StatusCode::NOT_FOUND.into_response(),
+            }
+        }
+    };
+
+    axum::Router::new()
+        .route("/", axum::routing::get(root_handler))
+        .route("/*path", axum::routing::get(spa_handler))
 }
 
 pub fn prepare_thumbnails_cache(thumbnails_dir_path: &Path) {
