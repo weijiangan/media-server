@@ -68,7 +68,7 @@ export default function HomeScreen() {
   });
 
   const { width } = Dimensions.get("window");
-  const [numColumns, setNumColumns] = useState(3);
+  const [numColumns, setNumColumns] = useState(Math.floor(width / 115));
 
   useFocusEffect(() => {
     const newNumColumns = Math.floor(width / 115);

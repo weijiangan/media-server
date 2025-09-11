@@ -5,15 +5,17 @@ pkgdesc="Media server with thumbnails, streaming and REST API"
 arch=('x86_64' 'aarch64')
 url="https://example.com/media-server"
 depends=('ffmpeg')
-makedepends=('rust' 'cargo' 'pkg-config' 'openssl' 'nodejs' 'npm')
+makedepends=('pkg-config' 'openssl')
 provides=('media-server')
 source=()
 noextract=()
+# sqlx crate does not support the build flag "-flto=auto" (Link Time Optimization, LTO) which is enabled by default by Arch Linux makepkg tool
+options=('!lto')
 
 build() {
   cd "$srcdir/server"
   # Use a release build; --locked can be removed if Cargo.lock should be ignored
-  cargo build --release --locked
+  cargo build --release
 }
 
 package() {
@@ -25,10 +27,10 @@ package() {
   install -Dm644 "config.json" "$pkgdir/etc/media-server/config.json"
 
   # Systemd unit
+  echo $(pwd)
   install -Dm644 "../packaging/media-server.service" "$pkgdir/usr/lib/systemd/system/media-server.service"
 
   # Directories for runtime data
-  install -d "$pkgdir/var/lib/media-server"
   install -d "$pkgdir/var/log/media-server"
 
   # Build frontend if present

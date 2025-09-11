@@ -50,6 +50,9 @@
 	- Placeholder thumbnail creation and a startup GC for stale temp-like thumbnail files are implemented. [DONE]
 	- CORS is configurable via `cors_allowed_origins` and `cors_allow_credentials`. [DONE]
 	- CORS is configurable via `cors_allowed_origins` and `cors_allow_credentials`. The server now uses a strict behaviour: CORS must be explicitly configured (or disabled via `cors_enabled = false`) and startup validation rejects `cors_allow_credentials = true` when origins are wildcard/Any. [DONE]
+	- Resolved import/handler issues: aliased `axum::extract::Path` as `AxumPath` to avoid collision with `std::path::Path`, and updated the SPA handler to accept an optional path so `/` correctly serves `index.html`. [DONE]
+	- SPA serving behavior: `build_client_service` implements SPA fallback (serves `index.html` when a requested file is missing) and is mounted only when `client_dist_dir` is explicitly configured. [DONE]
+	- Dev config selection: prefer presence-based loading of `./config.dev.json` when present in the working directory (no environment variable required). [DONE]
   - ETag and Last-Modified headers:
     - Streaming: metadata-based ETag (SHA-256 over path+size+mtime) and Last-Modified headers added; honors `If-None-Match` and returns 304 when matched. [DONE]
     - Thumbnails: manual-serving path sets ETag and Last-Modified; static `/thumbnails` mount (ServeDir) handles conditional GETs. [DONE]
@@ -82,6 +85,7 @@
 
 	In progress / Completed items
 	- [x] Serve static thumbnails from the configured thumbnails directory mounted at `/thumbnails` using `tower-http` ServeDir.
+	- [x] Serve client SPA when `client_dist_dir` is explicitly configured (SPA fallback via `build_client_service`).
 	- [x] Responses now include `type`/`kind`; URLs are not embedded to avoid hardcoding sizes. Use `/media/thumbnail?id|path&w&h` as needed. [CURRENT]
 	- [x] CORS behaviour: strict-mode implemented. `cors_allowed_origins` must be present (use empty array for Any) or set `cors_enabled=false` to disable CORS; invalid combinations (credentials + Any) cause startup errors. [NEW]
 	- [x] Added `image` and `tokio-util` dependencies and implemented generation code paths.

@@ -4,9 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=media
-Group=media
+DynamicUser=yes
+Group=public
+StateDirectory=media-server
+CacheDirectory=media-server
 WorkingDirectory=/var/lib/media-server
+Environment="RUST_LOG=info"
 ExecStart=/usr/bin/media-server --config /etc/media-server/config.json
 Restart=on-failure
 RestartSec=5s
